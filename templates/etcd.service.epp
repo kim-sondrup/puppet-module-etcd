@@ -1,0 +1,31 @@
+<%- | String[1] $user,
+      Stdlib::Absolutepath $etcd_bin,
+      Stdlib::Absolutepath $working_directory,
+      Integer $max_open_files,
+      Optional[String[1]] $etcd_name = undef,
+| -%>
+# This file is being maintained by Puppet.
+# DO NOT EDIT
+[Unit]
+Description=etcd key-value store
+Documentation=https://github.com/etcd-io/etcd
+After=network-online.target local-fs.target remote-fs.target time-sync.target
+Wants=network-online.target local-fs.target remote-fs.target time-sync.target
+
+[Service]
+User=<%= $user %>
+Type=notify
+<% if $etcd_name { -%>
+Environment=ETCD_NAME=<%= $etcd_name %>
+<% } -%>
+EnvironmentFile=-/etc/sysconfig/etcd
+WorkingDirectory=<%= shellquote($working_directory) %>
+ExecStart=<%= shellquote($etcd_bin) %> $OPTS
+Restart=always
+RestartSec=10s
+LimitNOFILE=<%= $max_open_files %>
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

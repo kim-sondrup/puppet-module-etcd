@@ -42,147 +42,49 @@
 # @param max_open_files
 #   The value for systemd LimitNOFILE unit option
 class etcd (
-  String $version = '3.4.7',
-  Stdlib::HTTPUrl $base_url = 'https://github.com/etcd-io/etcd/releases/download',
-  String[1] $os = downcase($facts['kernel']),
-  String[1] $arch = $facts['os']['architecture'],
+  String $version                         = '3.5.1',
   Optional[Stdlib::HTTPUrl] $download_url = undef,
-  Stdlib::Absolutepath $download_dir = '/tmp',
-  Stdlib::Absolutepath $extract_dir = '/opt',
-  Stdlib::Absolutepath $bin_dir = '/usr/bin',
-  Boolean $manage_user = true,
-  Boolean $manage_group = true,
-  String[1] $user = 'etcd',
-  Optional[Integer] $user_uid = undef,
-  String[1] $group = 'etcd',
-  Optional[Integer] $group_gid = undef,
-  Stdlib::Absolutepath $config_path = '/etc/etcd.yaml',
-  Hash $config = {'data-dir' => '/var/lib/etcd'},
-  Integer $max_open_files = 40000,
+  Optional[String[1]] $download_proxy     = undef,
+  Stdlib::Absolutepath $bin_dir           = '/usr/bin',
+  Boolean $manage_user                    = true,
+  Boolean $manage_group                   = true,
+  String[1] $user                         = 'etcd',
+  String[1] $group                        = 'etcd',
+  Stdlib::Absolutepath $working_directory = '/var/lib/etcd',
+  Optional[String[1]] $etcd_name          = '%H',
+  Integer $max_open_files                 = 40000,
 ) {
 
-  if $os != 'linux' {
-    fail("Module etcd only supports Linux, not ${os}")
-  }
   if $facts['service_provider'] != 'systemd' {
     fail('Module etcd only supported on systems using systemd')
   }
-  if ! $config['data-dir'] {
-    fail('Module etcd requires data-dir be specified in config Hash')
+
+  class { 'etcd::install':
+    version        => $version,
+    bin_dir        => $bin_dir,
+    manage_user    => $manage_user,
+    manage_group   => $manage_group,
+    user           => $user,
+    group          => $group,
+    download_proxy => $download_proxy,
   }
 
-  case $arch {
-    'x86_64', 'amd64': { $real_arch = 'amd64' }
-    'aarch64':         { $real_arch = 'arm64' }
-    default:           { $real_arch = $arch }
-  }
+  Class['etcd::install'] -> Class['etcd::service']
+  Class['etcd::install'] -> File <| path == $working_directory |>
 
-  $_download_url = pick($download_url, "${base_url}/v${version}/etcd-v${version}-${os}-${real_arch}.tar.gz")
-  $install_dir = "${extract_dir}/etcd-${version}"
-
-  file { $install_dir:
+  file { 'etcd-working-directory':
     ensure => 'directory',
-    owner  => 'root',
-    group  => 'root',
-    mode   => '0755',
-  }
-
-  archive { "${download_dir}/etcd.tar.gz":
-    source          => $_download_url,
-    extract         => true,
-    extract_path    => $install_dir,
-    extract_command => 'tar xfz %s --strip-components=1',
-    creates         => "${install_dir}/etcd",
-    cleanup         => true,
-    user            => 'root',
-    group           => 'root',
-    require         => File[$install_dir],
-    before          => [
-      File['etcd'],
-      File['etcdctl'],
-    ]
-  }
-
-  file { 'etcd':
-    ensure => 'link',
-    path   => "${bin_dir}/etcd",
-    target => "${install_dir}/etcd",
-    notify => Service['etcd'],
-  }
-  file { 'etcdctl':
-    ensure => 'link',
-    path   => "${bin_dir}/etcdctl",
-    target => "${install_dir}/etcdctl",
-  }
-
-  if $manage_user {
-    user { 'etcd':
-      ensure     => 'present',
-      name       => $user,
-      forcelocal => true,
-      shell      => '/bin/false',
-      gid        => $group,
-      uid        => $user_uid,
-      home       => $config['data-dir'],
-      managehome => false,
-      system     => true,
-      before     => Service['etcd'],
-    }
-  }
-  if $manage_group {
-    group { 'etcd':
-      ensure     => 'present',
-      name       => $group,
-      forcelocal => true,
-      gid        => $group_gid,
-      system     => true,
-      before     => Service['etcd'],
-    }
-  }
-
-  file { 'etcd.yaml':
-    ensure  => 'file',
-    path    => $config_path,
-    owner   => $user,
-    group   => $group,
-    mode    => '0600',
-    content => to_yaml($config),
-    notify  => Service['etcd'],
-  }
-
-  file { 'etcd-data-dir':
-    ensure => 'directory',
-    path   => $config['data-dir'],
+    path   => $working_directory,
     owner  => $user,
     group  => $group,
     mode   => '0700',
     notify => Service['etcd'],
   }
 
-  if $config['wal-dir'] {
-    file { 'etcd-wal-dir':
-      ensure => 'directory',
-      path   => $config['wal-dir'],
-      owner  => $user,
-      group  => $group,
-      mode   => '0700',
-      notify => Service['etcd'],
-    }
-  }
-
-  systemd::unit_file { 'etcd.service':
-    content => template('etcd/etcd.service.erb'),
-    notify  => Service['etcd'],
-  }
-
-  if versioncmp($facts['puppetversion'],'6.1.0') < 0 {
-    # Puppet 5 does not execute 'systemctl daemon-reload' automatically (https://tickets.puppetlabs.com/browse/PUP-3483)
-    # and camptocamp/systemd only creates this relationship when managing the service
-    Class['systemd::systemctl::daemon_reload'] -> Service['etcd']
-  }
-
-  service { 'etcd':
-    ensure => 'running',
-    enable => true,
+  class { 'etcd::service':
+    user              => $user,
+    working_directory => $working_directory,
+    etcd_name         => $etcd_name,
+    max_open_files    => $max_open_files,
   }
 }
